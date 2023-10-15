@@ -1,6 +1,7 @@
 import random
 
 import geometry_msgs.msg
+import std_msgs.msg
 from geometry_msgs.msg import Pose, PoseArray, Quaternion
 from .pf_base import PFLocaliserBase
 import math
@@ -25,7 +26,7 @@ class PFLocaliser(PFLocaliserBase):
 
         # ----- Set motion model parameters CHANGE THESE??
         self.ODOM_ROTATION_NOISE = 0.5  # Odometry model rotation noise
-        self.ODOM_TRANSLATION_NOISE = 0.5  # Odometry x axis (forward) noise
+        self.ODOM_TRANSLATION_NOISE = 0.5  # Odometry x-axis (forward) noise
         self.ODOM_DRIFT_NOISE = 0.5  # Odometry y axis (side-side) noise
 
         # ----- Sensor model parameters
@@ -48,21 +49,24 @@ class PFLocaliser(PFLocaliserBase):
 
         particles = []
 
+        h = std_msgs.msg.Header()
+        h.stamp = rospy.Time.now()
+
         for i in range(self.NUMBER_OF_PARTICLES):
             particle = Pose()
-            particle.position.x = initialpose.position.x + (gauss(initialpose.position.x, self.INIT_VARIANCE) * self.ODOM_TRANSLATION_NOISE)
-            particle.position.y = initialpose.position.y + (gauss(initialpose.position.y, self.INIT_VARIANCE) * self.ODOM_DRIFT_NOISE)
-            particle.position.z = initialpose.position.z  # We don't think we need to add noise to the z axis ???
+            particle.position.x = initialpose.pose.pose.position.x + (gauss(initialpose.pose.pose.position.x, self.INIT_VARIANCE) * self.ODOM_TRANSLATION_NOISE)
+            particle.position.y = initialpose.pose.pose.position.y + (gauss(initialpose.pose.pose.position.y, self.INIT_VARIANCE) * self.ODOM_DRIFT_NOISE)
+            particle.position.z = initialpose.pose.pose.position.z  # We don't think we need to add noise to the z axis ???
 
-            heading = getHeading(initialpose.orientation)
+            heading = getHeading(initialpose.pose.pose.orientation)
             random_heading = gauss(heading, self.INIT_VARIANCE)
             yaw = random_heading - heading
 
-            particle.orientation = rotateQuaternion(initialpose.orientation, (yaw * self.ODOM_ROTATION_NOISE))
+            particle.orientation = rotateQuaternion(initialpose.pose.pose.orientation, (yaw * self.ODOM_ROTATION_NOISE))
 
             particles.append(particle)
 
-        particle_cloud = PoseArray(particles)
+        particle_cloud = PoseArray(h, particles)
 
         return particle_cloud
 
@@ -78,6 +82,9 @@ class PFLocaliser(PFLocaliserBase):
         # Loop through the cloud, for each pose get_weight
         weights = []
 
+        h = std_msgs.msg.Header()
+        h.stamp = rospy.Time.now()
+
         for pose in self.particlecloud.poses:
             weights += self.sensor_model.get_weight(scan, pose)
 
@@ -87,9 +94,9 @@ class PFLocaliser(PFLocaliserBase):
         thresholds = [weights[0]]
 
         for i in range(1, len(weights) - 1):
-            thresholds += thresholds[i-1] + weights[i]
+            thresholds += thresholds[i - 1] + weights[i]
 
-        u = random.uniform(0, 1/len(weights))
+        u = random.uniform(0, 1 / len(weights))
 
         # instantiate new poses
         i = 0
@@ -101,9 +108,9 @@ class PFLocaliser(PFLocaliserBase):
             old_p = self.particlecloud.poses[j]
 
             new_p = Pose()
-            new_p.position.x = old_p.position.x + (gauss(old_p.position.x, self.INIT_VARIANCE) * self.ODOM_TRANSLATION_NOISE)
-            new_p.position.y = old_p.position.y + (gauss(old_p.position.y, self.INIT_VARIANCE) * self.ODOM_DRIFT_NOISE)
-            new_p.position.z = old_p.position.z  # We don't think we need to add noise to the z axis ???
+            new_p.position.x = old_p.pose.pose.position.x + (gauss(old_p.pose.pose.position.x, self.INIT_VARIANCE) * self.ODOM_TRANSLATION_NOISE)
+            new_p.position.y = old_p.pose.pose.position.y + (gauss(old_p.pose.pose.position.y, self.INIT_VARIANCE) * self.ODOM_DRIFT_NOISE)
+            new_p.position.z = old_p.pose.pose.position.z  # We don't think we need to add noise to the z axis ???
 
             heading = getHeading(old_p.orientation)
             random_heading = gauss(heading, self.INIT_VARIANCE)
@@ -114,11 +121,10 @@ class PFLocaliser(PFLocaliserBase):
             # add to new posearray
             new_particles.append(new_p)
 
-            u = u + 1/len(weights)
-
-        self.particlecloud = new_particles
+            u = u + 1 / len(weights)
 
         # update self.particlecloud
+        self.particlecloud = new_particles
 
     def estimate_pose(self):
         """
@@ -148,7 +154,8 @@ class PFLocaliser(PFLocaliserBase):
                 p_i = self.particlecloud[i]
                 p_j = self.particlecloud[j]
 
-                dist = (p_i.position.x - p_j.position.x) ** 2 + (p_i.position.y - p_j.position.y) ** 2 + (p_i.position.z - p_j.position.z) ** 2
+                dist = (p_i.pose.position.x - p_j.pose.position.x) ** 2 + (p_i.pose.position.y - p_j.pose.position.y) ** 2 + (
+                            p_i.pose.position.z - p_j.pose.position.z) ** 2
 
                 if dist <= self.EPSILON:  # If distance to other pose is less than our set max then we have a neighbour
                     neighbours_i += [p_j]
@@ -156,7 +163,7 @@ class PFLocaliser(PFLocaliserBase):
 
         # Now we have to cluster the neighbours
         for k in range(self.NUMBER_OF_PARTICLES):
-            for m in range(len(neighbours[k])-1):
+            for m in range(len(neighbours[k]) - 1):
                 neighbours[k] += neighbours[m]
 
         # Now we find the largest cluster
@@ -175,7 +182,7 @@ class PFLocaliser(PFLocaliserBase):
         total_xyzh = [0, 0, 0, 0]
 
         for i in range(top_len - 1):
-            current = neighbours[top_index][i]
+            current = neighbours[top_index][i] #may need pose pose
             total_xyzh[0] += current.position.x
             total_xyzh[1] += current.position.y
             total_xyzh[2] += current.position.z
