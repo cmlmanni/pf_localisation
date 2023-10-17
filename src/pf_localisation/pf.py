@@ -19,15 +19,15 @@ class PFLocaliser(PFLocaliserBase):
         # ----- Call the superclass constructor
         super(PFLocaliser, self).__init__()
 
-        self.NUMBER_OF_PARTICLES = 50 
+        self.NUMBER_OF_PARTICLES = 1000
         self.INIT_VARIANCE = 2
-        self.EPSILON = 2
+        self.EPSILON = 0.5
         self.NEIGHBOUR_LIM = 3
 
         # ----- Set motion model parameters CHANGE THESE??
-        self.ODOM_ROTATION_NOISE = 0.9  # Odometry model rotation noise
-        self.ODOM_TRANSLATION_NOISE = 0.9  # Odometry x-axis (forward) noise
-        self.ODOM_DRIFT_NOISE = 0.9  # Odometry y axis (side-side) noise
+        self.ODOM_ROTATION_NOISE = 5  # Odometry model rotation noise
+        self.ODOM_TRANSLATION_NOISE = 5  # Odometry x-axis (forward) noise
+        self.ODOM_DRIFT_NOISE = 5  # Odometry y axis (side-side) noise
 
         # ----- Sensor model parameters
         self.NUMBER_PREDICTED_READINGS = 20  # Number of readings to predict
@@ -67,7 +67,6 @@ class PFLocaliser(PFLocaliserBase):
 
         particle_cloud = PoseArray()
         particle_cloud.poses = particles
-
         return particle_cloud
 
     def update_particle_cloud(self, scan):
@@ -79,22 +78,45 @@ class PFLocaliser(PFLocaliserBase):
             | scan (sensor_msgs.msg.LaserScan): laser scan to use for update
 
          """
+
+
         # Loop through the cloud, for each pose get_weight
 
         weights = []
 
         # h = std_msgs.msg.Header()
         # h.stamp = rospy.Time.now()
-
+        '''sum_x = 0
+        sum_y = 0
+        sum_ori = 0'''
         for pose in self.particlecloud.poses:
             weights.append(self.sensor_model.get_weight(scan, pose))
+            '''sum_x += pose.position.x
+            sum_y += pose.position.y
+            heading = getHeading(pose.orientation)
+            sum_ori += heading'''
 
+
+        sum_weights = sum(weights)
+        weights = [w / sum_weights for w in weights]
         # Do roulette to determine how many dupes of the pose
         new_particles = []
 
         thresholds = [weights[0]]
         m = len(weights)
+        '''mean_x = sum_x/m
+        mean_y = sum_y/m
+        mean_ori = sum_ori/m
 
+        variance_x =0
+        variance_y = 0
+        variance_ori = 0
+        for pose in self.particlecloud.poses:
+            variance_x += (pose.position.x - mean_x) ** 2
+            variance_y += (pose.position.y - mean_y) ** 2
+
+        variance_x = variance_x / (m-1)
+        variance_y = variance_y / (m-1)'''
         for i in range(1, m):
             thresholds.append(thresholds[i - 1] + weights[i])
 
@@ -102,7 +124,7 @@ class PFLocaliser(PFLocaliserBase):
 
         # instantiate new poses
         i = 0
-
+        noise = 0.1
         for j in range(m):
             # print('[Start of j] Amount of particles: ' + str(len(self.particlecloud.poses)))
 
@@ -110,21 +132,26 @@ class PFLocaliser(PFLocaliserBase):
                 i += 1
 
             old_p = self.particlecloud.poses[i]
+            if j == i:
+                new_particles.append(old_p)
+            else:
+                new_p = Pose()
+                new_p.position.x = old_p.position.x + uniform(-noise, noise)
+                new_p.position.y = old_p.position.y + uniform(-noise, noise)  # We don't think we need to add noise to the z axis ???
 
-            new_p = Pose()
-            new_p.position.x = old_p.position.x + (normalvariate(0, self.INIT_VARIANCE) * self.ODOM_TRANSLATION_NOISE)
-            new_p.position.y = old_p.position.y + (normalvariate(0, self.INIT_VARIANCE) * self.ODOM_DRIFT_NOISE)  # We don't think we need to add noise to the z axis ???
+                heading = getHeading(old_p.orientation)
 
-            heading = getHeading(old_p.orientation)
-            random_heading = gauss(heading, self.INIT_VARIANCE)
-            yaw = random_heading - heading
+                new_p.orientation = rotateQuaternion(old_p.orientation, heading * uniform(-noise, noise))
 
-            new_p.orientation = rotateQuaternion(old_p.orientation, (yaw * self.ODOM_ROTATION_NOISE))
+                # add to new posearray
+                new_particles.append(new_p)
 
-            # add to new posearray
-            new_particles.append(new_p)
+            u = u + (1 / m)
 
-            u = u + 1 / m
+        # make 5 gooood particles
+        good_p = self.particlecloud.poses[weights.index(max(weights))]
+        for z in range(10):
+            new_particles[randint(1, (m-1))] = good_p
 
         # update self.particlecloud
         self.particlecloud.poses = new_particles
